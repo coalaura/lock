@@ -1,19 +1,35 @@
 package lock
 
-import "sync/atomic"
+import (
+	"runtime"
+	"sync/atomic"
+)
 
-type Lock struct {
-	lock uintptr
+// SpinLock is a lightweight, atomic lock. It is highly efficient for
+// extremely short critical sections where putting a goroutine to sleep
+// (like sync.Mutex does) would be too slow.
+type SpinLock struct {
+	locked atomic.Bool
 }
 
-func NewLock() *Lock {
-	return &Lock{}
+func NewLock() *SpinLock {
+	return &SpinLock{}
 }
 
-func (l *Lock) Lock() bool {
-	return atomic.CompareAndSwapUintptr(&l.lock, 0, 1)
+// TryLock attempts to acquire the lock and returns true if successful.
+// It returns immediately and does not block.
+func (l *SpinLock) TryLock() bool {
+	return l.locked.CompareAndSwap(false, true)
 }
 
-func (l *Lock) Unlock() {
-	atomic.StoreUintptr(&l.lock, 0)
+// Lock blocks until the lock is acquired.
+func (l *SpinLock) Lock() {
+	for !l.TryLock() {
+		runtime.Gosched()
+	}
+}
+
+// Unlock releases the lock.
+func (l *SpinLock) Unlock() {
+	l.locked.Store(false)
 }
