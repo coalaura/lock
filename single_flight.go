@@ -36,6 +36,21 @@ func NewSingleFlightMap[K comparable, V any]() *SingleFlightMap[K, V] {
 	}
 }
 
+// Keys returns a slice of all keys currently in the map.
+func (m *SingleFlightMap[K, V]) Keys() []K {
+	m.mu.RLock()
+
+	keys := make([]K, 0, len(m.items))
+
+	for k := range m.items {
+		keys = append(keys, k)
+	}
+
+	m.mu.RUnlock()
+
+	return keys
+}
+
 // GetOrFill calls GetOrFillWithTTL with a 0 TTL (no expiration).
 func (m *SingleFlightMap[K, V]) GetOrFill(key K, generator func() (V, error)) (V, error) {
 	return m.GetOrFillWithTTL(key, 0, generator)
