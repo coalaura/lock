@@ -147,6 +147,29 @@ func (m *SingleFlightMap[K, V]) GetOrFillWithTTL(key K, ttl time.Duration, gener
 	return c.val, c.err
 }
 
+// MustGetOrFill calls MustGetOrFillWithTTL with a 0 TTL (no expiration).
+func (m *SingleFlightMap[K, V]) MustGetOrFill(key K, generator func() V) V {
+	return m.MustGetOrFillWithTTL(key, 0, generator)
+}
+
+// MustGetOrFillWithTTL returns the value. If missing, it coordinates a single generator call.
+// If ttl is > 0, the item will be automatically and fully removed from memory after the duration.
+func (m *SingleFlightMap[K, V]) MustGetOrFillWithTTL(key K, ttl time.Duration, generator func() V) V {
+	m.mu.RLock()
+	it, ok := m.items[key]
+	m.mu.RUnlock()
+
+	if ok {
+		return it.val
+	}
+
+	val, _ := m.GetOrFillWithTTL(key, ttl, func() (V, error) {
+		return generator(), nil
+	})
+
+	return val
+}
+
 // Get returns the value if it exists. It does NOT wait for in-flight generations.
 func (m *SingleFlightMap[K, V]) Get(key K) (V, bool) {
 	m.mu.RLock()
