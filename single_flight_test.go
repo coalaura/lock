@@ -18,7 +18,7 @@ func TestSingleFlightMap_SingleExecution(t *testing.T) {
 
 	for range 100 {
 		wg.Go(func() {
-			val, err := m.GetOrFill("key1", func() (string, error) {
+			val, _, err := m.GetOrFill("key1", func() (string, error) {
 				atomic.AddInt32(&calls, 1)
 
 				time.Sleep(50 * time.Millisecond) // work
@@ -129,7 +129,7 @@ func TestSingleFlightMap_GetAndWait(t *testing.T) {
 func TestSingleFlightMap_GeneratorError(t *testing.T) {
 	m := NewSingleFlightMap[string, string]()
 
-	_, err := m.GetOrFill("key1", func() (string, error) {
+	_, _, err := m.GetOrFill("key1", func() (string, error) {
 		return "", errors.New("generation failed")
 	})
 

@@ -51,20 +51,20 @@ func (m *SingleFlightMap[K, V]) Keys() []K {
 	return keys
 }
 
-// GetOrFill calls GetOrFillWithTTL with a 0 TTL (no expiration).
-func (m *SingleFlightMap[K, V]) GetOrFill(key K, generator func() (V, error)) (V, error) {
+// GetOrFill calls GetOrFillWithTTL with a 0 TTL (no expiration) and returns if the value was filled (if the generator was called).
+func (m *SingleFlightMap[K, V]) GetOrFill(key K, generator func() (V, error)) (V, bool, error) {
 	return m.GetOrFillWithTTL(key, 0, generator)
 }
 
-// GetOrFillWithTTL returns the value. If missing, it coordinates a single generator call.
+// GetOrFillWithTTL returns the value and if the value was filled (if the generator was called). If missing, it coordinates a single generator call.
 // If ttl is > 0, the item will be automatically and fully removed from memory after the duration.
-func (m *SingleFlightMap[K, V]) GetOrFillWithTTL(key K, ttl time.Duration, generator func() (V, error)) (V, error) {
+func (m *SingleFlightMap[K, V]) GetOrFillWithTTL(key K, ttl time.Duration, generator func() (V, error)) (V, bool, error) {
 	m.mu.RLock()
 	it, ok := m.items[key]
 	m.mu.RUnlock()
 
 	if ok {
-		return it.val, nil
+		return it.val, false, nil
 	}
 
 	m.cmu.Lock()
@@ -77,7 +77,7 @@ func (m *SingleFlightMap[K, V]) GetOrFillWithTTL(key K, ttl time.Duration, gener
 	if ok {
 		m.cmu.Unlock()
 
-		return it.val, nil
+		return it.val, false, nil
 	}
 
 	if call, inFlight := m.calls[key]; inFlight {
@@ -85,7 +85,7 @@ func (m *SingleFlightMap[K, V]) GetOrFillWithTTL(key K, ttl time.Duration, gener
 
 		call.wg.Wait()
 
-		return call.val, call.err
+		return call.val, false, call.err
 	}
 
 	c := new(call[V])
@@ -144,30 +144,22 @@ func (m *SingleFlightMap[K, V]) GetOrFillWithTTL(key K, ttl time.Duration, gener
 		m.mu.Unlock()
 	}
 
-	return c.val, c.err
+	return c.val, true, c.err
 }
 
-// MustGetOrFill calls MustGetOrFillWithTTL with a 0 TTL (no expiration).
-func (m *SingleFlightMap[K, V]) MustGetOrFill(key K, generator func() V) V {
-	return m.MustGetOrFillWithTTL(key, 0, generator)
+// WillGetOrFill calls MustGetOrFillWithTTL with a 0 TTL (no expiration) and returns if the value was filled (if the generator was called).
+func (m *SingleFlightMap[K, V]) WillGetOrFill(key K, generator func() V) (V, bool) {
+	return m.WillGetOrFillWithTTL(key, 0, generator)
 }
 
-// MustGetOrFillWithTTL returns the value. If missing, it coordinates a single generator call.
+// WillGetOrFillWithTTL returns the value and if the value was filled (if the generator was called). If missing, it coordinates a single generator call.
 // If ttl is > 0, the item will be automatically and fully removed from memory after the duration.
-func (m *SingleFlightMap[K, V]) MustGetOrFillWithTTL(key K, ttl time.Duration, generator func() V) V {
-	m.mu.RLock()
-	it, ok := m.items[key]
-	m.mu.RUnlock()
-
-	if ok {
-		return it.val
-	}
-
-	val, _ := m.GetOrFillWithTTL(key, ttl, func() (V, error) {
+func (m *SingleFlightMap[K, V]) WillGetOrFillWithTTL(key K, ttl time.Duration, generator func() V) (V, bool) {
+	val, filled, _ := m.GetOrFillWithTTL(key, ttl, func() (V, error) {
 		return generator(), nil
 	})
 
-	return val
+	return val, filled
 }
 
 // Get returns the value if it exists. It does NOT wait for in-flight generations.
@@ -179,13 +171,13 @@ func (m *SingleFlightMap[K, V]) Get(key K) (V, bool) {
 	return it.val, ok
 }
 
-// Set forcefully overwrites a key with no TTL.
-func (m *SingleFlightMap[K, V]) Set(key K, val V) {
-	m.SetWithTTL(key, val, 0)
+// Set forcefully overwrites a key with no TTL and returns if the key already existed.
+func (m *SingleFlightMap[K, V]) Set(key K, val V) bool {
+	return m.SetWithTTL(key, val, 0)
 }
 
-// SetWithTTL forcefully overwrites a key and applies a TTL.
-func (m *SingleFlightMap[K, V]) SetWithTTL(key K, val V, ttl time.Duration) {
+// SetWithTTL forcefully overwrites a key, applies a TTL and returns if the key already existed.
+func (m *SingleFlightMap[K, V]) SetWithTTL(key K, val V, ttl time.Duration) bool {
 	m.mu.Lock()
 
 	m.seq++
@@ -197,7 +189,8 @@ func (m *SingleFlightMap[K, V]) SetWithTTL(key K, val V, ttl time.Duration) {
 		id:  id,
 	}
 
-	if oldTimer, exists := m.timers[key]; exists {
+	oldTimer, exists := m.timers[key]
+	if exists {
 		oldTimer.Stop()
 	}
 
@@ -218,21 +211,26 @@ func (m *SingleFlightMap[K, V]) SetWithTTL(key K, val V, ttl time.Duration) {
 	}
 
 	m.mu.Unlock()
+
+	return exists
 }
 
-// Delete removes a key from the map.
-func (m *SingleFlightMap[K, V]) Delete(key K) {
+// Delete removes a key from the map and returns if it existed.
+func (m *SingleFlightMap[K, V]) Delete(key K) bool {
 	m.mu.Lock()
 
 	delete(m.items, key)
 
-	if t, exists := m.timers[key]; exists {
+	t, exists := m.timers[key]
+	if exists {
 		t.Stop()
 
 		delete(m.timers, key)
 	}
 
 	m.mu.Unlock()
+
+	return exists
 }
 
 // GetAndWait returns the value if it exists. If the value is currently
